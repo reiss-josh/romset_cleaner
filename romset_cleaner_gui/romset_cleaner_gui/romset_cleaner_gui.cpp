@@ -28,7 +28,7 @@ HINSTANCE hInst;
 
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes);
+void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes, fs::path outputPath);
 
 int CALLBACK WinMain(
     _In_ HINSTANCE hInstance,
@@ -80,7 +80,7 @@ int CALLBACK WinMain(
         szTitle,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        500, 500,
+        600, 500,
         NULL,
         NULL,
         hInstance,
@@ -121,10 +121,73 @@ int CALLBACK WinMain(
 //
 //  WM_PAINT    - Paint the main window
 //  WM_DESTROY  - post a quit message and return
+
+#include <shlobj.h>
+fs::path BrowseFolder(std::string saved_path)
+{
+    BROWSEINFO   bi;
+    ZeroMemory(&bi, sizeof(bi));
+    TCHAR   szDisplayName[MAX_PATH];
+
+    bi.hwndOwner = NULL;
+    bi.pidlRoot = NULL;
+    bi.pszDisplayName = szDisplayName;
+    bi.lpszTitle = _T("Please select a folder for storing received files :");
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    bi.lParam = NULL;
+    bi.iImage = 0;
+
+    LPITEMIDLIST   pidl = SHBrowseForFolder(&bi);
+    TCHAR   szPathName[MAX_PATH];
+    if (NULL != pidl)
+    {
+        BOOL bRet = SHGetPathFromIDList(pidl, szPathName);
+        if (FALSE == bRet)
+            return"";
+        OutputDebugString(szPathName);
+        std::wstring arr_w(szPathName);
+        return arr_w;
+    }
+    return "";
+}
+
+std::string ws2s(const std::wstring& s)
+{
+    int len;
+    int slength = (int)s.length() + 1;
+    len = WideCharToMultiByte(CP_ACP, 0, s.c_str(), slength, 0, 0, 0, 0);
+    char* buf = new char[len];
+    WideCharToMultiByte(CP_ACP, 0, s.c_str(), slength, buf, len, 0, 0);
+    std::string r(buf);
+    delete[] buf;
+    return r;
+}
+
+#include<sstream>
+STRLIST CommaDelimitedStrings_ToSTRLST(std::string inputStr) {
+    inputStr = std::regex_replace(inputStr, std::regex(", "), ",");
+    OutputDebugStringA(inputStr.c_str());
+    STRLIST result = {};
+    std::stringstream ss(inputStr);
+    while (ss.good())
+    {
+        std::string substr;
+        getline(ss, substr, ',');
+        result.push_back(substr);
+    }
+    return result;
+}
+
+//need to get all these parameters somehow
+fs::path outputPath = "N/A";
+fs::path srcPath = "";
+fs::path destPath = "";
+STRLIST countryHierarchy = { "USA" };
+STRLIST excludedStrings = { "(Beta)", "(Prototype)", "(Proto)", "(Demo)", "(Wii Virtual Console)" };
+STRLIST fileExts = { ".z64" };
+STRLIST versionCodes = { "Rev", "ver" };
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    PAINTSTRUCT ps;
-    HDC hdc;
     TCHAR title[] = _T("Hello, Windows desktop!");
     TCHAR greeting[] = _T("Hello, Windows desktop!");
 
@@ -132,65 +195,100 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         case WM_CREATE:
         {
-            CreateWindow(TEXT("button"), TEXT("Show Title"),
-            WS_VISIBLE | WS_CHILD | BS_CHECKBOX,
-            20, 20, 185, 35,
-            hWnd, (HMENU)1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            CheckDlgButton(hWnd, 1, BST_CHECKED);
+            CreateWindow(TEXT("button"), TEXT("Select source directory..."),
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+                20, 20, 250, 35,
+                hWnd, (HMENU)1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
 
-            CreateWindow(L"BUTTON", L"OK", // Button text 
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
-                10,         // x position 
-                100,         // y position 
-                50,        // Button width
-                25,        // Button height
+            CreateWindowA("STATIC", "SOURCE UNSET",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                300, 20, 250, 35,
+                hWnd, (HMENU)11, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("button"), TEXT("Select destination directory..."),
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+                20, 60, 250, 35,
                 hWnd, (HMENU)2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindowA("STATIC", "DESTINATION UNSET",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                300, 60, 250, 35,
+                hWnd, (HMENU)12, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("button"), TEXT("Select output log directory (optional)..."),
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+                20, 100, 250, 35,
+                hWnd, (HMENU)3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindowA("STATIC", "N/A",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                300, 100, 250, 35,
+                hWnd, (HMENU)13, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(L"BUTTON", L"LET'S DO IT!!", // Button text 
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+                20,         // x position 
+                300,         // y position 
+                250,        // Button width
+                35,        // Button height
+                hWnd, (HMENU)4, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("EDIT"), TEXT("USA, JAPAN, EUROPE"),
+                WS_VISIBLE | WS_CHILD | WS_BORDER,
+                20, 140, 250, 35,
+                hWnd, (HMENU)21, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("EDIT"), TEXT("(BETA), (PROTO), (DEMO)"),
+                WS_VISIBLE | WS_CHILD | WS_BORDER,
+                20, 180, 250, 35,
+                hWnd, (HMENU)22, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("EDIT"), TEXT(".z64"),
+                WS_VISIBLE | WS_CHILD | WS_BORDER,
+                20, 220, 250, 35,
+                hWnd, (HMENU)23, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            CreateWindow(TEXT("EDIT"), TEXT("Rev, ver"),
+                WS_VISIBLE | WS_CHILD | WS_BORDER,
+                20, 260, 250, 35,
+                hWnd, (HMENU)24, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+
+            
             break;
         }
         case WM_COMMAND:
         {
-            bool checked = IsDlgButtonChecked(hWnd, 1);
+            //fs::path outputPath = "";
             switch (wParam)
             {
                 case 1:
-                    OutputDebugString(L"you clicked the checkbox");
-                    
-                    if (checked) {
-                        CheckDlgButton(hWnd, 1, BST_UNCHECKED);
-                        SetWindowText(hWnd, TEXT(""));
-                    }
-                    else {
-                        CheckDlgButton(hWnd, 1, BST_CHECKED);
-                        SetWindowText(hWnd, title);
-                    }
+                    srcPath = BrowseFolder("C:\\");
+                    SetWindowText(GetDlgItem(hWnd, 11), srcPath.c_str());
                     break;
                 case 2:
-                    OutputDebugString(L"you clicked the button");
-                    //need to get all these parameters somehow
-                    std::string srcPath = "D:/Downloads/n64romsets/nointro/testing";
-                    std::string destPath = "D:/Downloads/n64romsets/nointro/testing/cleaned";
-                    STRLIST countryHierarchy = { "USA" };
-                    STRLIST excludedStrings = { "(Beta)", "(Prototype)", "(Proto)", "(Demo)", "(Wii Virtual Console)"};
-                    STRLIST fileExts = { ".z64" };
-                    STRLIST versionCodes = {"Rev", "ver"};
-                    bigWorker(srcPath, destPath, countryHierarchy, excludedStrings, fileExts, versionCodes);
+                    destPath = BrowseFolder("C:\\");
+                    SetWindowText(GetDlgItem(hWnd, 12), destPath.c_str());
+                    break;
+                case 3:
+                    outputPath = BrowseFolder("C:\\");
+                    SetWindowText(GetDlgItem(hWnd, 13), outputPath.c_str());
+                    break;
+                case 4:
+                    TCHAR   buff[MAX_PATH];
+                    for (int i = 21; i < 25; i++) {
+                        GetDlgItemText(hWnd, i, buff, 1024);
+                        std::wstring arr_w(buff);
+                        STRLIST result = CommaDelimitedStrings_ToSTRLST(ws2s(arr_w));
+                        if (i == 21) countryHierarchy = result;
+                        if (i == 22) excludedStrings = result;
+                        if (i == 23) fileExts = result;
+                        if (i == 24) versionCodes = result;
+                    }
+                    bigWorker(srcPath, destPath, countryHierarchy, excludedStrings, fileExts, versionCodes, outputPath);
                     break;
             }
             break;
         }
-        case WM_PAINT:
-            hdc = BeginPaint(hWnd, &ps);
-
-            // Here your application is laid out.
-            // For this introduction, we just print out "Hello, Windows desktop!"
-            // in the top left corner.
-            TextOut(hdc,
-                5, 5,
-                greeting, _tcslen(greeting));
-            // End application-specific layout section.
-
-            EndPaint(hWnd, &ps);
-            break;
         case WM_DESTROY:
             PostQuitMessage(0);
             break;
@@ -216,9 +314,18 @@ void print_map(std::map<K, V> const& m, fs::path filename) {
     outfile.close();
 }
 
-//template<typename T>
-//void print_list(std::list<T> const& m, fs::path filename) {
-void print_list(std::list<fs::path> m, fs::path filename) {
+template<typename T>
+void print_list(std::list<T> const& m, fs::path filename) {
+    std::ofstream outfile;
+    outfile.open(filename);
+    for (auto const& i : m) {
+        outfile << i << "\n";
+    }
+    outfile.close();
+}
+
+//for file weirdness
+void print_fs_list(std::list<fs::path> m, fs::path filename) {
     std::ofstream outfile;
     outfile.open(filename);
     for (auto const& i : m) {
@@ -325,7 +432,7 @@ void MoveRoms(PATHLIST listOfChosenRoms, fs::path src, fs::path dst) {
     }
 }
 
-void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes = {}) {
+void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes = {}, fs::path outputPath = "N/A") {
     
     if (fs::exists(sourcePath)) OutputDebugString(L"exists!");
     else OutputDebugString(L"source invalid!");
@@ -335,8 +442,7 @@ void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCod
         fs::create_directory(destinationPath);
     }
 
-    fs::path outputPath = "D:/Downloads/n64romsets/nointro/testing/textfiles";
-    if (!fs::exists(outputPath)) {
+    if ((!fs::exists(outputPath)) && outputPath != "N/A") {
         OutputDebugString(L"creating output path!");
         fs::create_directory(outputPath);
     }
@@ -344,6 +450,12 @@ void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCod
     ROMCACHE cache = GenerateCache(sourcePath, fileExtensions, versionCodes, exclusionStrings);
     PATHLIST listOfChosenRoms = GetList(cache, countryCodes, versionCodes);
     //MoveRoms(listOfChosenRoms, sourcePath, destinationPath);
-    print_map(cache, outputPath/"cache.txt"); //debug cache
-    print_list(listOfChosenRoms, outputPath/"chosen.txt"); //debug chosen
+    if (outputPath != "N/A")
+    {
+        print_map(cache, outputPath / "cache.txt"); //debug cache
+        print_fs_list(listOfChosenRoms, outputPath / "chosen.txt"); //debug chosen
+        print_list(countryCodes, outputPath / "countrycodes.txt");
+        print_list(fileExtensions, outputPath / "filextensions.txt");
+        print_list(exclusionStrings, outputPath / "exclusionStrings.txt");
+    }
 }
