@@ -28,7 +28,7 @@ HINSTANCE hInst;
 
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, bool exclusiveRegions, STRLIST versionCodes);
+void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes);
 
 int CALLBACK WinMain(
     _In_ HINSTANCE hInstance,
@@ -153,7 +153,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             switch (wParam)
             {
                 case 1:
-                    OutputDebugString(L"bluh");
+                    OutputDebugString(L"you clicked the checkbox");
                     
                     if (checked) {
                         CheckDlgButton(hWnd, 1, BST_UNCHECKED);
@@ -165,15 +165,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                     break;
                 case 2:
-                    OutputDebugString(L"bloh");
+                    OutputDebugString(L"you clicked the button");
+                    //need to get all these parameters somehow
                     std::string srcPath = "D:/Downloads/n64romsets/nointro/testing";
                     std::string destPath = "D:/Downloads/n64romsets/nointro/testing/cleaned";
-                    STRLIST countryHierarchy = { "USA", "Japan" };
-                    STRLIST excludedStrings = { "(Beta)", "(Prototype)" };
+                    STRLIST countryHierarchy = { "USA" };
+                    STRLIST excludedStrings = { "(Beta)", "(Prototype)", "(Proto)", "(Demo)", "(Wii Virtual Console)"};
                     STRLIST fileExts = { ".z64" };
-                    bool exclusiveRegions = true;
                     STRLIST versionCodes = {"Rev", "ver"};
-                    bigWorker(srcPath, destPath, countryHierarchy, excludedStrings, fileExts, exclusiveRegions, versionCodes);
+                    bigWorker(srcPath, destPath, countryHierarchy, excludedStrings, fileExts, versionCodes);
                     break;
             }
             break;
@@ -216,13 +216,15 @@ void print_map(std::map<K, V> const& m, fs::path filename) {
     outfile.close();
 }
 
-template<typename T>
-void print_list(std::list<T> const& m, fs::path filename) {
+//template<typename T>
+//void print_list(std::list<T> const& m, fs::path filename) {
+void print_list(std::list<fs::path> m, fs::path filename) {
     std::ofstream outfile;
     outfile.open(filename);
     for (auto const& i : m) {
-        outfile << i << "\n";
+        outfile << i.u8string() << "\n";
     }
+    outfile.close();
 }
 
 std::string StrlistDelimiter(STRLIST lst, std::string delimiter, std::string upFront = "", std::string outBack = "") {
@@ -251,18 +253,18 @@ std::string RemoveRegionAndLang(std::string inputString, STRLIST versionCodes = 
 bool MatchExtensions(std::string input, STRLIST fileExtensions) {
     std::string extSum = StrlistDelimiter(fileExtensions, "|");
     std::regex ext(extSum);
-    return std::regex_search(input, ext);
+    return std::regex_search(input, ext);;
 }
 
-fs::path SelectBestVersion(STRLIST versions, STRLIST countryCodes, bool excludeRegion) {
-    return versions.front();
-}
-
-ROMCACHE GenerateCache(fs::path source, STRLIST fileExtensions, STRLIST versionCodes = {}) {
+ROMCACHE GenerateCache(fs::path source, STRLIST fileExtensions, STRLIST versionCodes, STRLIST exclusionStrings) {
     ROMCACHE cache;
+    int srcLength = source.u8string().length() + 1;
+    std::regex exc(StrlistDelimiter(exclusionStrings, "|"));
+
     for (const auto& entry : fs::directory_iterator(source)) {
         std::string filename = entry.path().u8string();
-        if (MatchExtensions(filename, fileExtensions)) {
+        filename.erase(0, srcLength);
+        if (MatchExtensions(filename, fileExtensions) && !(std::regex_search(filename, exc))) {
             std::string noRegion = RemoveRegionAndLang(filename, versionCodes);
             auto search = cache.find(noRegion);
             if (search == cache.end()) {
@@ -275,11 +277,42 @@ ROMCACHE GenerateCache(fs::path source, STRLIST fileExtensions, STRLIST versionC
     return cache;
 }
 
-PATHLIST GetList(ROMCACHE cache, STRLIST countryCodes, bool excludeRegion, STRLIST versionCodes = {}) {
+std::string SearchOrderedSubstringSet(STRLIST set, STRLIST codeSet) {
+    for (const auto& code : codeSet) {
+        for (const auto& ver : set) {
+            if (ver.find(code) != std::string::npos)
+                return ver;
+        }
+    }
+    return ""; //if no appropriate match is found
+}
+
+fs::path SelectBestVersion(STRLIST versions, STRLIST countryCodes, std::regex versionCodesEx) {
+    std::smatch m;
+    std::string bestVer = "";
+    std::string highestRev = "";
+    for (const auto& country : countryCodes) {
+        for (const auto& ver : versions) {
+            if (ver.find(country) != std::string::npos)
+            {
+                std::regex_search(ver, m, versionCodesEx);
+                if (m.str() >= highestRev) //if the version code is higher than the one for highestRev
+                {
+                    bestVer = ver;
+                    highestRev = m.str();
+                }
+            }
+        }
+        if (bestVer != "") return bestVer;
+    }
+    return bestVer; //if no appropriate match is found
+}
+
+PATHLIST GetList(ROMCACHE cache, STRLIST countryCodes, STRLIST versionCodes) {
     PATHLIST lst = {};
     for (auto const& pair : cache) {
-        fs::path best = SelectBestVersion(pair.second, countryCodes, excludeRegion);
-        if (best != "N/A") {
+        fs::path best = SelectBestVersion(pair.second, countryCodes, std::regex(StrlistDelimiter(versionCodes, "[^)]*\\)| \\(", " \\(", "[^)]*\\)")));
+        if (best != std::string()) {
             lst.push_back(best);
         }
     }
@@ -287,10 +320,12 @@ PATHLIST GetList(ROMCACHE cache, STRLIST countryCodes, bool excludeRegion, STRLI
 }
 
 void MoveRoms(PATHLIST listOfChosenRoms, fs::path src, fs::path dst) {
-
+    for (auto const& currRom : listOfChosenRoms) {
+        fs::rename(src/currRom, dst/currRom);
+    }
 }
 
-void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, bool exclusiveRegions, STRLIST versionCodes = {}) {
+void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCodes, STRLIST exclusionStrings, STRLIST fileExtensions, STRLIST versionCodes = {}) {
     
     if (fs::exists(sourcePath)) OutputDebugString(L"exists!");
     else OutputDebugString(L"source invalid!");
@@ -306,9 +341,9 @@ void bigWorker(fs::path sourcePath, fs::path destinationPath, STRLIST countryCod
         fs::create_directory(outputPath);
     }
 
-    ROMCACHE cache = GenerateCache(sourcePath, fileExtensions, versionCodes);
-    PATHLIST listOfChosenRoms = GetList(cache, countryCodes, exclusiveRegions, versionCodes);
-    MoveRoms(listOfChosenRoms, sourcePath, destinationPath);
-    print_map(cache, outputPath/"cache.txt");
-    print_list(listOfChosenRoms, outputPath / "chosen.txt");
+    ROMCACHE cache = GenerateCache(sourcePath, fileExtensions, versionCodes, exclusionStrings);
+    PATHLIST listOfChosenRoms = GetList(cache, countryCodes, versionCodes);
+    //MoveRoms(listOfChosenRoms, sourcePath, destinationPath);
+    print_map(cache, outputPath/"cache.txt"); //debug cache
+    print_list(listOfChosenRoms, outputPath/"chosen.txt"); //debug chosen
 }
